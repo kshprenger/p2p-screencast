@@ -1,0 +1,16 @@
+[package]
+name = "rendezvous-point"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures = { version = "0.3" }
+libp2p = { version = "0.52", features = [
+    "identify",
+    "macros",
+    "ping",
+    "rendezvous",
+    "quic",
+    "tokio",
+] }
+tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "time"] }
