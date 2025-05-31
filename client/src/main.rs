@@ -2,48 +2,61 @@ use std::{error::Error, time::Duration};
 
 use futures::StreamExt;
 use libp2p::{
-    Multiaddr, ping, rendezvous,
+    Multiaddr, Swarm, ping, rendezvous,
     swarm::{NetworkBehaviour, SwarmEvent},
 };
 
-const RENDEZVOUS_POINT_ADDRESS_STR: &str = "/ip4/0.0.0.0/udp/37080/quic-v1";
+const RENDEZVOUS_POINT_ADDRESS_STR: &str = "/ip4/94.228.163.43/udp/37080/quic-v1";
 const RENDEZVOUS_POINT_PEER_ID_STR: &str = "12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
-const EXTERNAL_ADDRESS_STR: &str = "/ip4/vpn-se.pujak.ru/udp/37080/quic-v1";
+const PING_INTERVAL: Duration = Duration::from_secs(2);
+const PING_TIMEOUT: Duration = Duration::from_secs(10);
+const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(100500);
+const RENDEZVOUS_NAMESPACE: &str = "namespace";
+
+fn create_swarm() -> Swarm<MyBehaviour> {
+    libp2p::SwarmBuilder::with_new_identity()
+        .with_tokio()
+        .with_quic()
+        .with_behaviour(|key| MyBehaviour {
+            rendezvous: rendezvous::client::Behaviour::new(key.clone()),
+            ping: ping::Behaviour::new(
+                ping::Config::new()
+                    .with_interval(PING_INTERVAL)
+                    .with_timeout(PING_TIMEOUT),
+            ),
+        })
+        .unwrap()
+        .with_swarm_config(|config| config.with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT))
+        .build()
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let rendezvous_point_address = RENDEZVOUS_POINT_ADDRESS_STR.parse::<Multiaddr>()?;
     let rendezvous_point = RENDEZVOUS_POINT_PEER_ID_STR.parse()?;
 
-    let mut swarm = libp2p::SwarmBuilder::with_new_identity()
-        .with_tokio()
-        .with_quic()
-        .with_behaviour(|key| MyBehaviour {
-            rendezvous: rendezvous::client::Behaviour::new(key.clone()),
-            ping: ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(1))),
-        })?
-        .build();
+    let mut swarm = create_swarm();
 
-    let external_address = EXTERNAL_ADDRESS_STR.parse::<Multiaddr>()?;
-    swarm.add_external_address(external_address);
-
+    swarm.add_external_address(rendezvous_point_address.clone());
     swarm.dial(rendezvous_point_address.clone())?;
 
     while let Some(event) = swarm.next().await {
         match event {
-            SwarmEvent::NewListenAddr { address, .. } => {
-                println!("Listening on {}", address);
-            }
             SwarmEvent::ConnectionClosed {
                 peer_id,
                 cause: Some(error),
                 ..
             } if peer_id == rendezvous_point => {
-                println!("Lost connection to rendezvous point {}", error);
+                println!(
+                    "Lost connection to rendezvous point {} Reconnecting..",
+                    error
+                );
+                swarm.dial(rendezvous_point_address.clone())?;
             }
+
             SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == rendezvous_point => {
                 if let Err(error) = swarm.behaviour_mut().rendezvous.register(
-                    rendezvous::Namespace::from_static("rendezvous"),
+                    rendezvous::Namespace::from_static(RENDEZVOUS_NAMESPACE),
                     rendezvous_point,
                     None,
                 ) {
@@ -51,7 +64,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 println!("Connection established with rendezvous point {}", peer_id);
             }
-            // once `/identify` did its job, we know our external address and can register
+
             SwarmEvent::Behaviour(MyBehaviourEvent::Rendezvous(
                 rendezvous::client::Event::Registered {
                     namespace,
@@ -64,6 +77,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     namespace, rendezvous_node, ttl
                 );
             }
+
             SwarmEvent::Behaviour(MyBehaviourEvent::Rendezvous(
                 rendezvous::client::Event::RegisterFailed {
                     rendezvous_node,
@@ -76,6 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     rendezvous_node, namespace, error
                 );
             }
+
             SwarmEvent::Behaviour(MyBehaviourEvent::Ping(ping::Event {
                 peer,
                 result: Ok(rtt),
@@ -83,9 +98,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })) if peer != rendezvous_point => {
                 println!("Ping to {} is {}ms", peer, rtt.as_millis())
             }
-            other => {
-                println!("Unhandled {:?}", other);
-            }
+
+            _ => {}
         }
     }
     Ok(())
