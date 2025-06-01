@@ -5,8 +5,7 @@ edition = "2024"
 
 [dependencies]
 futures = { version = "0.3" }
-libp2p = { version = "0.52", features = [
-    "identify",
+libp2p = { version = "0.53", features = [
     "macros",
     "ping",
     "rendezvous",

@@ -2,17 +2,36 @@ use std::{error::Error, time::Duration};
 
 use futures::StreamExt;
 use libp2p::{
-    PeerId, identify, ping, rendezvous,
+    PeerId, Swarm, ping, rendezvous,
     swarm::{NetworkBehaviour, SwarmEvent},
 };
 
 const CONNECTION_ADDR: &str = "/ip4/0.0.0.0/udp/37080/quic-v1";
+const PING_INTERVAL: Duration = Duration::from_secs(5);
+const PING_TIMEOUT: Duration = Duration::from_secs(10);
+const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(100500);
 
 #[derive(NetworkBehaviour)]
-struct MyBehaviour {
-    identify: identify::Behaviour,
+struct Behaviour {
     rendezvous: rendezvous::server::Behaviour,
     ping: ping::Behaviour,
+}
+
+fn create_swarm() -> Swarm<Behaviour> {
+    libp2p::SwarmBuilder::with_new_identity()
+        .with_tokio()
+        .with_quic()
+        .with_behaviour(|key| Behaviour {
+            rendezvous: rendezvous::server::Behaviour::new(rendezvous::server::Config::default()),
+            ping: ping::Behaviour::new(
+                ping::Config::new()
+                    .with_interval(PING_INTERVAL)
+                    .with_timeout(PING_TIMEOUT),
+            ),
+        })
+        .unwrap()
+        .with_swarm_config(|config| config.with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT))
+        .build()
 }
 
 #[tokio::main]
@@ -20,18 +39,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let keypair = libp2p::identity::Keypair::ed25519_from_bytes([0; 32])?;
     println!("PeerId: {}", PeerId::from(keypair.public()));
 
-    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
-        .with_tokio()
-        .with_quic()
-        .with_behaviour(|key| MyBehaviour {
-            identify: identify::Behaviour::new(identify::Config::new(
-                "rendezvous-example/1.0.0".to_string(),
-                key.public(),
-            )),
-            rendezvous: rendezvous::server::Behaviour::new(rendezvous::server::Config::default()),
-            ping: ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(1))),
-        })?
-        .build();
+    let mut swarm = create_swarm();
 
     let _ = swarm.listen_on(CONNECTION_ADDR.parse()?)?;
     println!("Start listening on {}", CONNECTION_ADDR);
@@ -44,7 +52,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 println!("Disconnected from {}", peer_id);
             }
-            SwarmEvent::Behaviour(MyBehaviourEvent::Rendezvous(
+            SwarmEvent::Behaviour(BehaviourEvent::Rendezvous(
                 rendezvous::server::Event::PeerRegistered { peer, registration },
             )) => {
                 println!(
@@ -52,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     peer, registration.namespace
                 );
             }
-            SwarmEvent::Behaviour(MyBehaviourEvent::Rendezvous(
+            SwarmEvent::Behaviour(BehaviourEvent::Rendezvous(
                 rendezvous::server::Event::DiscoverServed {
                     enquirer,
                     registrations,

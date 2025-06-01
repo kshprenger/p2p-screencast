@@ -8,16 +8,16 @@ use libp2p::{
 
 const RENDEZVOUS_POINT_ADDRESS_STR: &str = "/ip4/94.228.163.43/udp/37080/quic-v1";
 const RENDEZVOUS_POINT_PEER_ID_STR: &str = "12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
-const PING_INTERVAL: Duration = Duration::from_secs(2);
+const PING_INTERVAL: Duration = Duration::from_secs(5);
 const PING_TIMEOUT: Duration = Duration::from_secs(10);
 const IDLE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(100500);
 const RENDEZVOUS_NAMESPACE: &str = "namespace";
 
-fn create_swarm() -> Swarm<MyBehaviour> {
+fn create_swarm() -> Swarm<Behaviour> {
     libp2p::SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_quic()
-        .with_behaviour(|key| MyBehaviour {
+        .with_behaviour(|key| Behaviour {
             rendezvous: rendezvous::client::Behaviour::new(key.clone()),
             ping: ping::Behaviour::new(
                 ping::Config::new()
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("Connection established with rendezvous point {}", peer_id);
             }
 
-            SwarmEvent::Behaviour(MyBehaviourEvent::Rendezvous(
+            SwarmEvent::Behaviour(BehaviourEvent::Rendezvous(
                 rendezvous::client::Event::Registered {
                     namespace,
                     ttl,
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
 
-            SwarmEvent::Behaviour(MyBehaviourEvent::Rendezvous(
+            SwarmEvent::Behaviour(BehaviourEvent::Rendezvous(
                 rendezvous::client::Event::RegisterFailed {
                     rendezvous_node,
                     namespace,
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
 
-            SwarmEvent::Behaviour(MyBehaviourEvent::Ping(ping::Event {
+            SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
                 peer,
                 result: Ok(rtt),
                 ..
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 #[derive(NetworkBehaviour)]
-struct MyBehaviour {
+struct Behaviour {
     rendezvous: rendezvous::client::Behaviour,
     ping: ping::Behaviour,
 }
