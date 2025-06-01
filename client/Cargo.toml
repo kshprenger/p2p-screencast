@@ -8,8 +8,11 @@ libp2p = { version = "0.53", features = [
     "macros",
     "ping",
     "rendezvous",
+    "request-response",
+    "cbor",
     "quic",
     "tokio",
 ] }
+serde = { version = "1.0", features = ["derive"] }
 futures = { version = "0.3" }
 tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "time"] }

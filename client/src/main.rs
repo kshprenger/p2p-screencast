@@ -2,9 +2,11 @@ use std::{error::Error, time::Duration};
 
 use futures::StreamExt;
 use libp2p::{
-    Multiaddr, Swarm, ping, rendezvous,
+    Multiaddr, StreamProtocol, Swarm, ping, rendezvous,
+    request_response::{self, ProtocolSupport},
     swarm::{NetworkBehaviour, SwarmEvent},
 };
+use serde::{Deserialize, Serialize};
 
 const RENDEZVOUS_POINT_ADDRESS_STR: &str = "/ip4/94.228.163.43/udp/37080/quic-v1";
 const RENDEZVOUS_POINT_PEER_ID_STR: &str = "12D3KooWDpJ7As7BWAwRMfu1VU2WCqNjvq387JEYKDBj4kx6nXTN";
@@ -24,6 +26,10 @@ fn create_swarm() -> Swarm<Behaviour> {
                     .with_interval(PING_INTERVAL)
                     .with_timeout(PING_TIMEOUT),
             ),
+            req_res: request_response::cbor::Behaviour::<BroadcastLockReq, BroadcastLockRes>::new(
+                [(StreamProtocol::new("/broadcast/1"), ProtocolSupport::Full)],
+                request_response::Config::default(),
+            ),
         })
         .unwrap()
         .with_swarm_config(|config| config.with_idle_connection_timeout(IDLE_CONNECTION_TIMEOUT))
@@ -36,6 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rendezvous_point = RENDEZVOUS_POINT_PEER_ID_STR.parse()?;
 
     let mut swarm = create_swarm();
+    let local_peer_id = swarm.local_peer_id().to_string();
 
     swarm.add_external_address(rendezvous_point_address.clone());
     swarm.dial(rendezvous_point_address.clone())?;
@@ -46,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 peer_id,
                 cause: Some(error),
                 ..
-            } if peer_id == rendezvous_point => {
+            } => {
                 println!(
                     "Lost connection to rendezvous point {} Reconnecting..",
                     error
@@ -54,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 swarm.dial(rendezvous_point_address.clone())?;
             }
 
-            SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == rendezvous_point => {
+            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 if let Err(error) = swarm.behaviour_mut().rendezvous.register(
                     rendezvous::Namespace::from_static(RENDEZVOUS_NAMESPACE),
                     rendezvous_point,
@@ -63,6 +70,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     println!("Failed to register: {error}");
                 }
                 println!("Connection established with rendezvous point {}", peer_id);
+                swarm
+                    .behaviour_mut()
+                    .req_res
+                    .send_request(&peer_id, BroadcastLockReq {});
             }
 
             SwarmEvent::Behaviour(BehaviourEvent::Rendezvous(
@@ -91,12 +102,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
 
+            SwarmEvent::Behaviour(BehaviourEvent::Rendezvous(
+                rendezvous::client::Event::Discovered { .. },
+            )) => {
+                println!("Discovery done");
+            }
+
             SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
                 peer,
                 result: Ok(rtt),
                 ..
-            })) if peer != rendezvous_point => {
-                println!("Ping to {} is {}ms", peer, rtt.as_millis())
+            })) => {
+                println!("Ping to {} is {}ms", peer, rtt.as_millis());
+                swarm.behaviour_mut().rendezvous.discover(
+                    Some(rendezvous::Namespace::new(RENDEZVOUS_NAMESPACE.to_string()).unwrap()),
+                    None,
+                    None,
+                    rendezvous_point,
+                );
             }
 
             _ => {}
@@ -105,8 +128,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct BroadcastLockReq {}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BroadcastLockRes {
+    res: Result<(), ()>,
+}
+
 #[derive(NetworkBehaviour)]
 struct Behaviour {
     rendezvous: rendezvous::client::Behaviour,
     ping: ping::Behaviour,
+    req_res: request_response::cbor::Behaviour<BroadcastLockReq, BroadcastLockRes>,
 }
