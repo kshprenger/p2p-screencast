@@ -30,11 +30,6 @@ struct SignalMessage {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct JoinRequest {
-    room_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct JoinResponse {
     peer_id: String,
     other_peers: Vec<String>,

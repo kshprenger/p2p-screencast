@@ -1,39 +1,94 @@
-use std::{error::Error, time::Duration};
-
-use futures::StreamExt;
-use libp2p::{
-    Multiaddr, StreamProtocol, Swarm, ping, rendezvous,
-    request_response::{self, ProtocolSupport},
-    swarm::{NetworkBehaviour, SwarmEvent},
-};
 use serde::{Deserialize, Serialize};
-use swarm::create_swarm;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use url::Url;
+use webrtc::api::APIBuilder;
+use webrtc::api::media_engine::MediaEngine;
+use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
+use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::peer_connection::configuration::RTCConfiguration;
 
-mod behaviour;
-mod swarm;
-mod transport;
-mod ui;
+const SERVER_URL: &str = "ws://vpn-se.pujak.ru:37080/ws";
 
-const RENDEZVOUS_POINT_ADDRESS_STR: &str = "/ip4/94.228.163.43/udp/37080/quic-v1";
-const MESSAGE_BOUND: usize = 100;
+#[derive(Debug, Serialize, Deserialize)]
+struct SignalMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    data: String,
+    target: Option<String>,
+    room_id: Option<String>,
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let rendezvous_point_address = RENDEZVOUS_POINT_ADDRESS_STR.parse::<Multiaddr>()?;
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
 
-    let mut swarm = create_swarm();
-    swarm.add_external_address(rendezvous_point_address.clone());
-    swarm.dial(rendezvous_point_address.clone())?;
+    // Create a MediaEngine to manage media codecs
+    let mut media_engine = MediaEngine::default();
+    media_engine.register_default_codecs().unwrap();
 
-    let (client_tx, client_rx) = tokio::sync::mpsc::channel::<()>(MESSAGE_BOUND);
+    // Create the API object
+    let api = APIBuilder::new().with_media_engine(media_engine).build();
 
-    let mut transport = transport::Transport::new(swarm, client_rx);
+    let config = RTCConfiguration {
+        ice_servers: vec![webrtc::ice_transport::ice_server::RTCIceServer {
+            urls: vec!["stun:stun1.l.google.com:5349".to_string()],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
 
-    tokio::spawn(async move {
-        transport.run_network().await;
-    });
+    // Create a PeerConnectionFactory
+    let peer_connection = Arc::new(api.new_peer_connection(config).await.unwrap());
+    // Set up signaling (e.g., WebSocket) here...
 
-    // Go(ui)
+    // Set up ICE Candidate handling
+    setup_ice_candidates(peer_connection.clone()).await;
 
+    let _data_channel = peer_connection
+        .create_data_channel("test", None)
+        .await
+        .unwrap();
+    // Create an offer to start ICE candidate gathering
+    let offer = peer_connection.create_offer(None).await.unwrap();
+    peer_connection.set_local_description(offer).await.unwrap();
+
+    // Set up track handling
+    setup_tracks(peer_connection.clone()).await;
+
+    println!("WebRTC application has started successfully.");
+    let url = Url::parse(SERVER_URL)?;
+    let (mut socket, _) = tungstenite::connect(url)?;
+    // socket.send(message);
+    // Send join request
+    let join_request = SignalMessage {
+        message_type: "join".to_string(),
+        data: "".to_string(),
+        target: None,
+        room_id: Some("1".to_string()),
+    };
+    let join_msg = serde_json::to_string(&join_request)?;
+    socket.send(tungstenite::Message::Text(join_msg))?;
+    thread::sleep(Duration::from_secs(6));
     Ok(())
+}
+
+async fn setup_ice_candidates(peer_connection: Arc<RTCPeerConnection>) {
+    peer_connection.on_ice_candidate(Box::new(|candidate: Option<RTCIceCandidate>| {
+        println!("New ICE candidate: {:?}", candidate);
+
+        if let Some(candidate) = candidate {
+            println!("New ICE candidate: {:?}", candidate);
+            // Send the candidate to the remote peer through signaling server
+        }
+        Box::pin(async {})
+    }));
+}
+
+async fn setup_tracks(peer_connection: Arc<RTCPeerConnection>) {
+    peer_connection.on_track(Box::new(|track, _| {
+        println!("New track received: {:?}", track);
+        Box::pin(async {})
+    }));
 }
