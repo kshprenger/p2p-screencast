@@ -6,17 +6,14 @@ use uuid::Uuid;
 use warp::Filter;
 use warp::ws::Message;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+const PORT: u16 = 37080;
+
+#[derive(Debug, Clone)]
 struct Peer {
-    id: String,
-    offer: Option<String>,
-    answer: Option<String>,
-    ice_candidates: Vec<String>,
-    #[serde(skip)]
     sender: Option<mpsc::UnboundedSender<Message>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct Room {
     peers: HashMap<String, Peer>,
 }
@@ -49,6 +46,8 @@ fn generate_peer_id() -> String {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     let rooms: Rooms = Arc::new(Mutex::new(HashMap::new()));
 
     let cors = warp::cors()
@@ -65,8 +64,8 @@ async fn main() {
 
     let routes = ws_route.with(cors).with(warp::log("signaling_server"));
 
-    println!("Starting WebSocket signaling server...");
-    warp::serve(routes).run(([0, 0, 0, 0], 37080)).await;
+    tracing::info!("Starting signaling server on {} port...", PORT);
+    warp::serve(routes).run(([0, 0, 0, 0], PORT)).await;
 }
 
 fn with_rooms(
@@ -97,7 +96,7 @@ async fn handle_connection(ws: warp::ws::WebSocket, rooms: Rooms) {
         let msg = match result {
             Ok(msg) => msg,
             Err(e) => {
-                eprintln!("websocket error: {}", e);
+                tracing::error!("websocket error: {}", e);
                 break;
             }
         };
@@ -175,13 +174,11 @@ async fn handle_join(
     room.peers.insert(
         peer_id.clone(),
         Peer {
-            id: peer_id.clone(),
-            offer: None,
-            answer: None,
-            ice_candidates: Vec::new(),
             sender: Some(sender),
         },
     );
+
+    tracing::info!("New peer {} joined room {}", peer_id, room_id);
 
     JoinResponse {
         peer_id,
@@ -194,6 +191,8 @@ async fn handle_leave(room_id: String, peer_id: String, rooms: Rooms) {
 
     if let Some(room) = rooms.get_mut(&room_id) {
         room.peers.remove(&peer_id);
+
+        tracing::info!("Peer {} left room {}", peer_id, room_id);
 
         for (_, peer) in room.peers.iter_mut() {
             if let Some(peer_sender) = &peer.sender {
@@ -210,6 +209,7 @@ async fn handle_leave(room_id: String, peer_id: String, rooms: Rooms) {
         }
 
         if room.peers.is_empty() {
+            tracing::info!("Room {} was destroyed", room_id);
             rooms.remove(&room_id);
         }
     }
@@ -219,21 +219,6 @@ async fn handle_signal(room_id: String, peer_id: String, message: SignalMessage,
     let mut rooms = rooms.lock().unwrap();
 
     if let Some(room) = rooms.get_mut(&room_id) {
-        if let Some(peer) = room.peers.get_mut(&peer_id) {
-            match message.message_type.as_str() {
-                "offer" => {
-                    peer.offer = Some(message.data.clone());
-                }
-                "answer" => {
-                    peer.answer = Some(message.data.clone());
-                }
-                "ice-candidate" => {
-                    peer.ice_candidates.push(message.data.clone());
-                }
-                _ => {}
-            }
-        }
-
         if let Some(target_peer_id) = message.target {
             if let Some(target_peer) = room.peers.get(&target_peer_id) {
                 if let Some(peer_sender) = &target_peer.sender {
@@ -243,6 +228,10 @@ async fn handle_signal(room_id: String, peer_id: String, message: SignalMessage,
                         target: Some(peer_id),
                         room_id: Some(room_id.clone()),
                     };
+                    tracing::info!(
+                        "Prepared signal message {:#?} to other peers",
+                        forwarded_message
+                    );
                     if let Ok(text) = serde_json::to_string(&forwarded_message) {
                         let _ = peer_sender.send(Message::text(text));
                     }

@@ -1,2 +1,2 @@
 [workspace]
-members = ["rendezvous-node", "client"]
+members = ["signal", "client"]
