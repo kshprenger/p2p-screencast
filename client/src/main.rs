@@ -9,16 +9,9 @@ use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 
-const SERVER_URL: &str = "ws://vpn-se.pujak.ru:37080/ws";
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SignalMessage {
-    #[serde(rename = "type")]
-    message_type: String,
-    data: String,
-    target: Option<String>,
-    room_id: Option<String>,
-}
+mod coordinator;
+mod transport;
+mod ui;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,19 +51,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_tracks(peer_connection.clone()).await;
 
     println!("WebRTC application has started successfully.");
-    let url = Url::parse(SERVER_URL)?;
-    let (mut socket, _) = tungstenite::connect(url)?;
-    // socket.send(message);
-    // Send join request
-    let join_request = SignalMessage {
-        message_type: "join".to_string(),
-        data: "".to_string(),
-        target: None,
-        room_id: Some("1".to_string()),
-    };
-    let join_msg = serde_json::to_string(&join_request)?;
-    socket.send(tungstenite::Message::Text(join_msg))?;
-    thread::sleep(Duration::from_secs(6));
     Ok(())
 }
 
