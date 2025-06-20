@@ -36,7 +36,7 @@ pub(crate) struct WsCooordinator {
 impl ICoordinator for WsCooordinator {
     type Message = SignalMessage;
     type Response = ();
-    type CoordinationCommand = String;
+    type Event = String;
 
     async fn send(
         &mut self,

@@ -5,12 +5,12 @@ mod ws;
 trait ICoordinator {
     type Message;
     type Response;
-    type CoordinationCommand;
+    type Event;
 
     async fn send(&mut self, message: Self::Message) -> Result<Self::Response, Box<dyn Error>>;
 
     async fn connect(
         &mut self,
         url: String,
-    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<Self::CoordinationCommand>, Box<dyn Error>>;
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<Self::Event>, Box<dyn Error>>;
 }
